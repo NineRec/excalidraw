@@ -21,7 +21,7 @@ const LibraryMenuBrowseButton = ({
       }&referrer=${referrer}&useHash=true&token=${id}&theme=${theme}&version=${
         VERSIONS.excalidrawLibrary
       }`}
-      target="_excalidraw_libraries"
+      target="_blank"
     >
       {t("labels.libraries")}
     </a>
