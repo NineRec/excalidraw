@@ -6,6 +6,7 @@ import {
   ExcalidrawProps,
   BinaryFiles,
 } from "../types";
+import { MarkOptional } from "../utility-types";
 
 export type ActionSource = "ui" | "keyboard" | "contextMenu" | "api";
 
@@ -109,10 +110,18 @@ export type ActionName =
   | "decreaseFontSize"
   | "unbindText"
   | "hyperlink"
-  | "eraser"
   | "bindText"
-  | "toggleLock"
-  | "toggleLinearEditor";
+  | "unlockAllElements"
+  | "toggleElementLock"
+  | "toggleLinearEditor"
+  | "toggleEraserTool"
+  | "toggleHandTool"
+  | "selectAllElementsInFrame"
+  | "removeAllElementsFromFrame"
+  | "toggleFrameRendering"
+  | "setFrameAsActiveTool"
+  | "createContainerFromText"
+  | "wrapTextInContainer";
 
 export type PanelComponentProps = {
   elements: readonly ExcalidrawElement[];

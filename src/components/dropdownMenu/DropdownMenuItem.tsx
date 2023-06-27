@@ -1,38 +1,33 @@
 import React from "react";
+import {
+  getDropdownMenuItemClassName,
+  useHandleDropdownMenuItemClick,
+} from "./common";
 import MenuItemContent from "./DropdownMenuItemContent";
-
-export const getDrodownMenuItemClassName = (className = "") => {
-  return `dropdown-menu-item dropdown-menu-item-base ${className}`.trim();
-};
 
 const DropdownMenuItem = ({
   icon,
   onSelect,
   children,
-  dataTestId,
   shortcut,
   className,
-  style,
-  ariaLabel,
+  ...rest
 }: {
   icon?: JSX.Element;
-  onSelect: () => void;
+  onSelect: (event: Event) => void;
   children: React.ReactNode;
-  dataTestId?: string;
   shortcut?: string;
   className?: string;
-  style?: React.CSSProperties;
-  ariaLabel?: string;
-}) => {
+} & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "onSelect">) => {
+  const handleClick = useHandleDropdownMenuItemClick(rest.onClick, onSelect);
+
   return (
     <button
-      aria-label={ariaLabel}
-      onClick={onSelect}
-      data-testid={dataTestId}
-      title={ariaLabel}
+      {...rest}
+      onClick={handleClick}
       type="button"
-      className={getDrodownMenuItemClassName(className)}
-      style={style}
+      className={getDropdownMenuItemClassName(className)}
+      title={rest.title ?? rest["aria-label"]}
     >
       <MenuItemContent icon={icon} shortcut={shortcut}>
         {children}

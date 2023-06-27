@@ -27,13 +27,20 @@ import {
   PRECEDING_ELEMENT_KEY,
   FONT_FAMILY,
   ROUNDNESS,
+  DEFAULT_SIDEBAR,
 } from "../constants";
 import { getDefaultAppState } from "../appState";
 import { LinearElementEditor } from "../element/linearElementEditor";
 import { bumpVersion } from "../element/mutateElement";
-import { getUpdatedTimestamp, updateActiveTool } from "../utils";
+import { getFontString, getUpdatedTimestamp, updateActiveTool } from "../utils";
 import { arrayToMap } from "../utils";
-import oc from "open-color";
+import { MarkOptional, Mutable } from "../utility-types";
+import {
+  detectLineHeight,
+  getDefaultLineHeight,
+  measureBaseline,
+} from "../element/textElement";
+import { COLOR_PALETTE } from "../colors";
 
 type RestoredAppState = Omit<
   AppState,
@@ -55,6 +62,8 @@ export const AllowedExcalidrawActiveTools: Record<
   freedraw: true,
   eraser: false,
   custom: true,
+  frame: true,
+  hand: true,
 };
 
 export type RestoredDataState = {
@@ -111,12 +120,13 @@ const restoreElementWithProperties = <
     angle: element.angle || 0,
     x: extra.x ?? element.x ?? 0,
     y: extra.y ?? element.y ?? 0,
-    strokeColor: element.strokeColor || oc.black,
-    backgroundColor: element.backgroundColor || "transparent",
+    strokeColor: element.strokeColor || COLOR_PALETTE.black,
+    backgroundColor: element.backgroundColor || COLOR_PALETTE.transparent,
     width: element.width || 0,
     height: element.height || 0,
     seed: element.seed ?? 1,
     groupIds: element.groupIds ?? [],
+    frameId: element.frameId ?? null,
     roundness: element.roundness
       ? element.roundness
       : element.strokeSharpness === "round"
@@ -163,18 +173,40 @@ const restoreElement = (
         const [fontPx, _fontFamily]: [string, string] = (
           element as any
         ).font.split(" ");
-        fontSize = parseInt(fontPx, 10);
+        fontSize = parseFloat(fontPx);
         fontFamily = getFontFamilyByName(_fontFamily);
       }
+      const text = element.text ?? "";
+
+      // line-height might not be specified either when creating elements
+      // programmatically, or when importing old diagrams.
+      // For the latter we want to detect the original line height which
+      // will likely differ from our per-font fixed line height we now use,
+      // to maintain backward compatibility.
+      const lineHeight =
+        element.lineHeight ||
+        (element.height
+          ? // detect line-height from current element height and font-size
+            detectLineHeight(element)
+          : // no element height likely means programmatic use, so default
+            // to a fixed line height
+            getDefaultLineHeight(element.fontFamily));
+      const baseline = measureBaseline(
+        element.text,
+        getFontString(element),
+        lineHeight,
+      );
       element = restoreElementWithProperties(element, {
         fontSize,
         fontFamily,
-        text: element.text ?? "",
-        baseline: element.baseline,
+        text,
         textAlign: element.textAlign || DEFAULT_TEXT_ALIGN,
         verticalAlign: element.verticalAlign || DEFAULT_VERTICAL_ALIGN,
         containerId: element.containerId ?? null,
-        originalText: element.originalText || element.text,
+        originalText: element.originalText || text,
+
+        lineHeight,
+        baseline,
       });
 
       if (refreshDimensions) {
@@ -242,6 +274,10 @@ const restoreElement = (
       return restoreElementWithProperties(element, {});
     case "diamond":
       return restoreElementWithProperties(element, {});
+    case "frame":
+      return restoreElementWithProperties(element, {
+        name: element.name ?? null,
+      });
 
     // Don't use default case so as to catch a missing an element type case.
     // We also don't want to throw, but instead return void so we filter
@@ -334,12 +370,33 @@ const repairBoundElement = (
   }
 };
 
+/**
+ * Remove an element's frameId if its containing frame is non-existent
+ *
+ * NOTE mutates elements.
+ */
+const repairFrameMembership = (
+  element: Mutable<ExcalidrawElement>,
+  elementsMap: Map<string, Mutable<ExcalidrawElement>>,
+) => {
+  if (element.frameId) {
+    const containingFrame = elementsMap.get(element.frameId);
+
+    if (!containingFrame) {
+      element.frameId = null;
+    }
+  }
+};
+
 export const restoreElements = (
   elements: ImportedDataState["elements"],
   /** NOTE doesn't serve for reconciliation */
   localElements: readonly ExcalidrawElement[] | null | undefined,
-  refreshDimensions = false,
+  opts?: { refreshDimensions?: boolean; repairBindings?: boolean } | undefined,
 ): ExcalidrawElement[] => {
+  // used to detect duplicate top-level element ids
+  const existingIds = new Set<string>();
+
   const localElementsMap = localElements ? arrayToMap(localElements) : null;
   const restoredElements = (elements || []).reduce((elements, element) => {
     // filtering out selection, which is legacy, no longer kept in elements,
@@ -347,22 +404,34 @@ export const restoreElements = (
     if (element.type !== "selection" && !isInvisiblySmallElement(element)) {
       let migratedElement: ExcalidrawElement | null = restoreElement(
         element,
-        refreshDimensions,
+        opts?.refreshDimensions,
       );
       if (migratedElement) {
         const localElement = localElementsMap?.get(element.id);
         if (localElement && localElement.version > migratedElement.version) {
           migratedElement = bumpVersion(migratedElement, localElement.version);
         }
+        if (existingIds.has(migratedElement.id)) {
+          migratedElement = { ...migratedElement, id: randomId() };
+        }
+        existingIds.add(migratedElement.id);
         elements.push(migratedElement);
       }
     }
     return elements;
   }, [] as ExcalidrawElement[]);
 
+  if (!opts?.repairBindings) {
+    return restoredElements;
+  }
+
   // repair binding. Mutates elements.
   const restoredElementsMap = arrayToMap(restoredElements);
   for (const element of restoredElements) {
+    if (element.frameId) {
+      repairFrameMembership(element, restoredElementsMap);
+    }
+
     if (isTextElement(element) && element.containerId) {
       repairBoundElement(element, restoredElementsMap);
     } else if (element.boundElements) {
@@ -391,21 +460,15 @@ const LegacyAppStateMigrations: {
     defaultAppState: ReturnType<typeof getDefaultAppState>,
   ) => [LegacyAppState[K][1], AppState[LegacyAppState[K][1]]];
 } = {
-  isLibraryOpen: (appState, defaultAppState) => {
+  isSidebarDocked: (appState, defaultAppState) => {
     return [
-      "openSidebar",
-      "isLibraryOpen" in appState
-        ? appState.isLibraryOpen
-          ? "library"
-          : null
-        : coalesceAppStateValue("openSidebar", appState, defaultAppState),
-    ];
-  },
-  isLibraryMenuDocked: (appState, defaultAppState) => {
-    return [
-      "isSidebarDocked",
-      appState.isLibraryMenuDocked ??
-        coalesceAppStateValue("isSidebarDocked", appState, defaultAppState),
+      "defaultSidebarDockedPreference",
+      appState.isSidebarDocked ??
+        coalesceAppStateValue(
+          "defaultSidebarDockedPreference",
+          appState,
+          defaultAppState,
+        ),
     ];
   },
 };
@@ -465,7 +528,7 @@ export const restoreAppState = (
           ? nextAppState.activeTool
           : { type: "selection" },
       ),
-      lastActiveToolBeforeEraser: null,
+      lastActiveTool: null,
       locked: nextAppState.activeTool.locked ?? false,
     },
     // Migrates from previous version where appState.zoom was a number
@@ -474,14 +537,13 @@ export const restoreAppState = (
         ? {
             value: appState.zoom as NormalizedZoomValue,
           }
-        : appState.zoom || defaultAppState.zoom,
-    // when sidebar docked and user left it open in last session,
-    // keep it open. If not docked, keep it closed irrespective of last state.
+        : appState.zoom?.value
+        ? appState.zoom
+        : defaultAppState.zoom,
     openSidebar:
-      nextAppState.openSidebar === "library"
-        ? nextAppState.isSidebarDocked
-          ? "library"
-          : null
+      // string (legacy)
+      typeof (appState.openSidebar as any as string) === "string"
+        ? { name: DEFAULT_SIDEBAR.name }
         : nextAppState.openSidebar,
   };
 };
@@ -496,9 +558,10 @@ export const restore = (
    */
   localAppState: Partial<AppState> | null | undefined,
   localElements: readonly ExcalidrawElement[] | null | undefined,
+  elementsConfig?: { refreshDimensions?: boolean; repairBindings?: boolean },
 ): RestoredDataState => {
   return {
-    elements: restoreElements(data?.elements, localElements),
+    elements: restoreElements(data?.elements, localElements, elementsConfig),
     appState: restoreAppState(data?.appState, localAppState || null),
     files: data?.files || {},
   };
