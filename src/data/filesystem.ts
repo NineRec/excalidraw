@@ -75,7 +75,7 @@ export const fileOpen = <M extends boolean | undefined = false>(opts: {
   }) as Promise<RetType>;
 };
 
-export const fileSave = (
+export const fileSave = async (
   blob: Blob,
   opts: {
     /** supply without the extension */
@@ -87,6 +87,16 @@ export const fileSave = (
     fileHandle?: FileSystemHandle | null;
   },
 ) => {
+  if (!nativeFileSystemSupported) {
+    const { writeBinaryFile, BaseDirectory } = window.__TAURI__.fs;
+    const contents = await blob.arrayBuffer();
+
+    return writeBinaryFile(
+      { path: `${opts.name}.${opts.extension}`, contents: contents }, 
+      { dir: BaseDirectory.Download },
+    );
+  }
+  
   return _fileSave(
     blob,
     {
